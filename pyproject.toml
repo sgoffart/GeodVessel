@@ -1,0 +1,38 @@
+[project]
+name = "geodesic-vessels"
+version = "0.1.0"
+description = "geodesic-vessels is a Python package for geodesic-based vessel reconnection and reconstruction. It aims to restore vascular continuity by reconnecting fragmented vessel segments using geodesic paths, while maintaining realistic topology and geometry. The package is designed for use in medical image analysis, particularly angiographic, CT, and MRI vascular datasets."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "networkx>=3.5",
+    "nibabel>=5.3.2",
+    "numpy>=2.3.4",
+    "pillow>=12.0.0",
+    "scikit-image>=0.25.2",
+    "scikit-learn>=1.7.2",
+    "simpleitk>=2.5.2",
+    "torch>=2.9.0",
+    "tqdm>=4.67.3",
+]
+
+[dependency-groups]
+dev = [
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.7",
+    "pandas>=2.3.3",
+    "plotly>=6.3.1",
+    "pynrrd>=1.1.3",
+    "pyvista>=0.47.0",
+    "tqdm>=4.67.3",
+]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

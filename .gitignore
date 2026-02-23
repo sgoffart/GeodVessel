@@ -1,0 +1,10 @@
+# keep build artifacts out
+build/
+dist/
+*.egg-info/
+
+# Python caches
+**/__pycache__
+*.pyc
+*.pyo
+*.python-version
