@@ -439,34 +439,3 @@ def compute_all_metrics(data:dict,metrics=None):
         results[_metric] = float(compute_metric(data, _metric)) # convert to float and not np.float
 
     return results
-
-# -------------------------------
-# Example usage
-# -------------------------------
-
-def main()->None:
-    np.random.seed(42)
-    gt_mask = np.random.randint(0, 2, (5, 5))  # ground truth binary mask
-    mask = np.random.randint(0, 2, (5, 5))  # predicted binary mask
-    skel_gt_mask = skeletonize(gt_mask)
-    skel_mask = skeletonize(mask)
-    
-    data = {
-        "y_true":gt_mask,
-        "y_pred":mask,
-        "y_skel_true": skel_gt_mask,
-        "y_skel_pred": skel_mask,
-        "y_coords_true": np.argwhere(gt_mask),
-        "y_coords_pred": np.argwhere(mask)
-        }
-    
-    # print(compute_metric(data,"dice"))
-    
-    # metrics to compute
-    _metrics = ["dice","precision","f1","hd","hd95","recall","jaccard","leakage","cldice","tp", "ts","assd","apl","apls","ccr"] # cldice
-    results = compute_all_metrics(data,_metrics)
-    print(results)
-    return
-    
-if __name__ == "__main__":
-    main()
