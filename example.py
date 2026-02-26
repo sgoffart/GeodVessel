@@ -46,7 +46,7 @@ prob = nrrd.load(PROB_PATH)
 # HYPERPARAMETER OPTIMIZATION (optional)
 # -----------------------------
 
-best_params = optimize_dip_params(img, seg > 0, prob,
+params = optimize_dip_params(img, seg > 0, prob,
                                   weight_map=FORMULATION,
                                   n_samples=5,
                                   n_iterations=10,
@@ -93,4 +93,3 @@ seg_corrected = seg_binary.astype(bool) | (vessels.mask > 0)
 #     },
 #     ["dice", "precision", "recall", "cldice"]
 # )
-
