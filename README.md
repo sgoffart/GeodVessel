@@ -61,6 +61,13 @@ Clone the repository and install the package.
    pip install .
    ```
 
+Complementary packages can be required:
+```bash
+   pip install pynrrd matplotlib 
+   ```
+
+
+
 ## Basic Usage Examples
 
 Below are snippets illustrating common workflows.
@@ -84,42 +91,3 @@ paths.compute_all_paths()
 unique = paths.filter_duplicates()
 cost_volume = paths.export_cost_maps()
 ```
-
-### Compact benchmark example
-
-The `tests/benchmark_5folds_ASOCA_3d.py` script illustrates a full
-pipeline.  You can either run it directly:
-
-```bash
-python tests/benchmark_5folds_ASOCA_3d.py
-```
-
-or invoke individual pieces in Python:
-
-```python
-from tests.benchmark_5folds_ASOCA_3d import process_patient, DEFAULT_PARAMS
-import os
-
-os.makedirs("out", exist_ok=True)
-res = process_patient("0019", 0, "out")
-print(res["metrics_new"])
-```
-
-The helper module has been removed from the package; please rely on the
-benchmark scripts or your own plotting code.
-
-## Testing & Benchmarks
-The `tests/` directory contains various scripts used to benchmark the
-algorithms on different datasets.  They can be executed directly with
-`python` and typically save output figures to the working directory.
-
-## Contribution & Maintenance
-- Add README sections or update existing ones when new functionality is
-  introduced.
-- Keep docstrings in sync with code; many functions now include
-  comprehensive descriptions.
-
----
-
-This README reflects the current state (Feb 2026) of the package and
-should be kept up-to-date when adding features or reorganizing the code.

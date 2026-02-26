@@ -6,40 +6,46 @@ No saving, no metrics, just function calls for a single patient.
 import numpy as np
 import nrrd
 from scipy.ndimage import label
+# from skimage.morphology import skeletonize
+# from geodesic_vessels.metrics import compute_all_metrics
 
 from geodesic_vessels.extremities import Extremities3D
 from geodesic_vessels.paths import GeodesicPaths3D
 from geodesic_vessels.reconstructions import ReconstructVessels3D
-from geodesic_vessels.hyperparameters import DEFAULT_PARAMS, optimize_dip_params
+from geodesic_vessels.hyperparameters import optimize_dip_params
 
 # -----------------------------
 # CONFIG (edit paths)
 # -----------------------------
 
-BASE = "/srv/storage/epione@storage2.sophia.grid5000.fr/sgoffart/datasets/ASOCA"
-PATIENT_ID = "0002"
-FOLD_ID = 0
 RECONSTRUCTION_METHOD = "scale"
 FORMULATION = "DIP"
 
-IMG_PATH  = f"{BASE}/Dataset002_ASOCA_5fold/imagesTr/case_{PATIENT_ID}_0000.nrrd"
-SEG_PATH  = f"{BASE}/nnUNet_results/Dataset002_ASOCA_5fold/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_{FOLD_ID}/validation/case_{PATIENT_ID}.nrrd"
-PROB_PATH = SEG_PATH.replace(".nrrd", ".npz")
+IMG_PATH  = "" # fill with the original image .nrrd file
+SEG_PATH  = "" # fill with binary mask:  .nrrd file
+PROB_PATH = "" # fill with binary mask:  .nrrd file
+
+DEFAULT_PARAMS = {"alpha": 1,
+                "beta": 0.01,
+                "gamma": 1,
+                "theta": 1,
+                "lambda": 0.1,
+                "deg": 75,
+                "max_it": 25,
+                "weight_map": "DIP", # or DIP+ / DI 
+                "device": "cuda"}
 
 # -----------------------------
 # LOAD DATA
 # -----------------------------
 img, _ = nrrd.read(IMG_PATH)
 seg, _ = nrrd.read(SEG_PATH)
-prob = np.load(PROB_PATH)["probabilities"][1]
-
-if prob.shape != img.shape:
-    prob = np.transpose(prob, (2, 1, 0))
+prob = nrrd.load(PROB_PATH)
 
 # -----------------------------
 # HYPERPARAMETER OPTIMIZATION (optional)
 # -----------------------------
-# small n_samples/n_iterations for speed
+
 best_params = optimize_dip_params(img, seg > 0, prob,
                                   weight_map=FORMULATION,
                                   n_samples=5,
@@ -74,8 +80,6 @@ seg_corrected = seg_binary.astype(bool) | (vessels.mask > 0)
 # -----------------------------
 # METRICS (commented out)
 # -----------------------------
-# from skimage.morphology import skeletonize
-# from geodesic_vessels.metrics import compute_all_metrics
 # skel_gt = skeletonize(gt).astype(np.uint8)
 # skel_pred = skeletonize(seg_corrected).astype(np.uint8)
 # metrics = compute_all_metrics(
@@ -90,5 +94,3 @@ seg_corrected = seg_binary.astype(bool) | (vessels.mask > 0)
 #     ["dice", "precision", "recall", "cldice"]
 # )
 
-print("Geodesic pipeline completed for patient", PATIENT_ID)
-print("seg_corrected shape:", seg_corrected.shape)

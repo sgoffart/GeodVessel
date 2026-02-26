@@ -2,6 +2,7 @@ README.md
 pyproject.toml
 src/geodesic_vessels/__init__.py
 src/geodesic_vessels/extremities.py
+src/geodesic_vessels/helpers.py
 src/geodesic_vessels/hyperparameters.py
 src/geodesic_vessels/main.py
 src/geodesic_vessels/metrics.py
