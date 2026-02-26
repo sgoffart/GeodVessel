@@ -1,26 +1,18 @@
 import numpy as np
-from scipy.ndimage import gaussian_filter
-from  dataclasses import dataclass
-
-from geodesic_vessels.extremities import *
-from geodesic_vessels.paths import *
-
 import matplotlib.pyplot as plt
-
-import numpy as np
+import torch
 from scipy.ndimage import gaussian_filter, binary_closing
 from skimage.morphology import remove_small_objects
 from dataclasses import dataclass, field
 from typing import List, Optional
 from skimage.filters import threshold_otsu
-import torch 
+ 
 
+from geodesic_vessels.extremities import *
+from geodesic_vessels.paths import *
 # -------------------------------
 # Radius based methods
 # -------------------------------
-
-import numpy as np
-from scipy.ndimage import gaussian_filter
 
 def reconstruct_tubular_vessels_ultraslim(
     img_shape, path, radius_map=None, patch_factor=2.0, sigma=1.0
@@ -57,7 +49,7 @@ def reconstruct_tubular_vessels_ultraslim(
 
     # Use default radius if none provided
     if radius_map is None:
-        radius_map = [1.0] * len(path)
+        radius_map = [0.5] * len(path)
     radius_map = np.array(radius_map, dtype=float)
 
     # --- Compute tangents along the path ---
@@ -289,22 +281,16 @@ class ReconstructVessel3D:
 
     def _reconstruct_vessels_auto_scale(
         self,
-        max_radius: int = 5,
+        max_radius: int = 2,
         factor: float = 2.0,
-        plane_eps: float = 0.5
+        plane_eps: float = 1.5
     ):
-        """
-        Reconstruct vessels using an automatically scaled threshold
-        based on centerline geodesic values.
+        """Reconstruct vessels using a cost-based adaptive threshold.
 
-        Parameters
-        ----------
-        max_radius : int
-            Radius of local cube around each centerline voxel
-        factor : float
-            Multiplicative factor applied to centerline cost
-        plane_eps : float
-            Thickness of orthogonal plane constraint
+        Each centerline voxel defines a local region around which voxels
+        with geodesic cost below ``factor * cost_center`` are included.
+        The plane_eps parameter restricts growth to a slab orthogonal to the
+        local centerline tangent. Used internally by :meth:`reconstruct`.
         """
         cost_map = self.path.cost_map
         shape = cost_map.shape
@@ -360,22 +346,35 @@ class ReconstructVessel3D:
         return vessel_mask
     
     def _reconstruct_from_radius_estimation(self) -> np.ndarray:
-        """
-        Radius-based reconstruction in 3D using tubular patches around the centerline.
-        """
-        if not hasattr(self.path, "path") or len(self.path.path) == 0:
-            raise ValueError("No centerline available in path for radius-based reconstruction.")
+        """Build a binary mask by creating a tubular vessel from radius data.
 
-        radius_map = [2.0] * len(self.path.path)
+        The method interpolates a radius value along the centerline using
+        attributes on the path object, clamps them to a plausible range, and
+        then calls :func:`reconstruct_tubular_vessels_ultraslim` to generate
+        the vessel volume.
+        """
+
+        # Use endpoint radius from the path object if available
+        # interpolate from start_radius to end_radius along the path
+        n = len(self.path.path)
+        
+        r_start = getattr(self.path, "ext_radius", 2.0)
+        r_end   = getattr(self.path, "target_radius", r_start)
+        
+        # linear interpolation of radius along the path
+        radius_map = np.linspace(r_start, r_end, n).tolist()
+        
+        # clamp to physiologically plausible range for coronary (0.5 - 3.0 mm)
+        radius_map = [max(0.5, min(r, 3.0)) for r in radius_map]
 
         vessel_mask = reconstruct_tubular_vessels_ultraslim(
             img_shape=self.path.img.shape,
             path=self.path.path,
             radius_map=radius_map,
-            sigma=0.6
+            patch_factor=1.2,   # was 2.0 — reduce to tighten the tube
+            sigma=0.4            # was 0.6 — less smoothing to avoid bloating
         )
-
-        print(f"[INFO] Radius-based 3D reconstruction done (vessel fraction={vessel_mask.mean():.4f})")
+        
         self.mask = vessel_mask
         return vessel_mask
 
@@ -398,12 +397,21 @@ class ReconstructVessel3D:
         return vessel_mask
 
 class ReconstructVessels3D:
+    """Container handling reconstruction of multiple vessel paths."""
     
     def __init__(self, _paths: GeodesicPaths3D):
+        """Initialize with a GeodesicPaths3D object and empty mask."""
         self.paths = _paths
         self.mask = field(default_factory=lambda: np.array([]))
 
     def reconstruct_all_paths(self, method:str):
+        """Reconstruct every path in the collection using given method.
+
+        Parameters
+        ----------
+        method : str
+            Passed directly to :class:`ReconstructVessel3D.reconstruct`.
+        """
         vessels = np.zeros_like(self.paths.img)
         for item in self.paths.paths:
             _tmp_vessel = ReconstructVessel3D(path = item,
@@ -411,7 +419,7 @@ class ReconstructVessels3D:
             _tmp_vessel.reconstruct(method = method)
             vessels += _tmp_vessel.mask
         self.mask = vessels
-    
-    # vessels =ReconstructVessels3D(paths_objs_int)
-    # vessels.reconstruct_all_paths(method = "radius")
 
+
+    
+    

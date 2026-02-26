@@ -1,24 +1,13 @@
 import numpy as np
+
 from scipy.spatial import cKDTree
 from skimage.morphology import skeletonize
 from scipy.ndimage import label
-from skimage.metrics import hausdorff_distance
 from sklearn.metrics import precision_score, recall_score, f1_score, jaccard_score
-from itertools import combinations
-
-import torch
-import torch.nn.functional as F
-
-
 from typing import Callable,Any, TypeAlias
-
-import networkx as nx
 
 Data: TypeAlias = dict[str,Any]
 MetricFn: TypeAlias = Callable[[Data],None]
-
-# TODO : Probably move to a class of computed metrics 
-# TODO : Optimize the computation (investigate to limite the calculation of label and skeletonize function (time-consuming functions))
 
 # -------------------------------
 # Mask utilities
@@ -37,7 +26,7 @@ def paths_to_mask(paths, shape):
             mask[int(z), int(y), int(x)] = True
     return mask
 
-# ------------------------------- 
+# ---------------------------------
 # # Extract paths from components 
 # # ------------------------------- 
 
@@ -405,8 +394,6 @@ metrics: dict[str,MetricFn]={
     "ncpred":ncpred
 }
 
-
-
 def compute_metric(data:dict,metric:str):
     metricFn = metrics.get(metric)
     if metricFn is None:
@@ -439,3 +426,4 @@ def compute_all_metrics(data:dict,metrics=None):
         results[_metric] = float(compute_metric(data, _metric)) # convert to float and not np.float
 
     return results
+

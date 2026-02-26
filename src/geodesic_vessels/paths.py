@@ -2,12 +2,7 @@ import numpy as np
 import torch
 from dataclasses import dataclass, field
 from typing import Tuple, List, Dict, Optional
-import warnings
-import json 
-from sklearn.mixture import GaussianMixture
-from scipy.ndimage import binary_dilation
 from tqdm import tqdm
-
 
 from geodesic_vessels.extremities import *
 
@@ -98,6 +93,22 @@ class GeodesicPath3D:
                                    device=None,
                                    lambda_dir=0.25,
                                    weight_map = "DIP+"):
+        """Compute the 3D geodesic distance map using a Jacobi iteration.
+
+        The algorithm is implemented in PyTorch to allow optional GPU
+        acceleration.  A variety of weight maps are supported (``D``, ``DI``,
+        ``DIP+`` etc.) combining anisotropic spatial distances, intensity
+        differences and probability penalties. Directional penalties and
+        anisotropic spacing are accounted for via ``_neighbor_offsets_torch_3d``.
+
+        Parameters mirror those in the original 2D implementation:
+        ``alpha``/``beta`` control spatial vs intensity weighting, ``gamma``
+        handles probability penalties, ``lambda_dir`` adds directional cost,
+        ``n_it`` is number of Jacobi iterations, ``tol`` stops early, and
+        ``weight_map`` selects the formula. The source extremity coordinates
+        are taken from ``self.ext``. After computation the resulting numpy
+        array is stored in ``self.cost_map`` and returned.
+        """
 
         img_np = np.asarray(self.img, dtype=np.float32)
         lbl_np = np.asarray(self.label_mask)
@@ -185,22 +196,20 @@ class GeodesicPath3D:
                 if weight_map == "DIP":
                     
                     base = torch.sqrt(alpha_t * dsq[m] + beta_t * dint)
-                    # w = base * (1 + gamma * prob_diff)
-                    
-                    # Direct probability penalty: high prob -> low penalty, low prob -> high penalty
-                    # Option A: inverse probability (simple)
                     prob_penalty = 1.0 / (prob_c + eps)
                     w = base * prob_penalty
-                    
-                    
                 elif weight_map == "DI":
                     w = torch.sqrt(alpha_t * dsq[m] + beta_t * dint)
+                
+                elif weight_map == "D":
+                    w = dsq[m]          
+                    
                 elif weight_map == "P": # probability only
                     # w = torch.sqrt(gamma * prob_diff)
                     w=(1 + gamma * prob_diff)
                     
                 elif weight_map == "DIP+":
-                    w = alpha_t*dsq[m] + beta_t * 1/dint + gamma_t*(1/prob_c+eps)
+                    w = alpha_t*dsq[m] + beta_t * dint + gamma_t*(1/prob_c+eps)
                     
                 elif weight_map == "DIP+a":
                     w = alpha_t*dsq[m] + beta_t *(1-dint) + gamma_t*(1-prob_c+eps)
@@ -240,6 +249,15 @@ class GeodesicPath3D:
     # Backtracking in 3D
     # ---------------------------------------------------------------------
     def _backtrack_min_path_3d(self, start_xyz, seeds_mask, max_steps=200000):
+        """Trace a minimal-cost path backwards from a starting voxel.
+
+        Given a pre-computed ``self.cost_map``, the method walks voxel-by-voxel
+        to the nearest low-cost seed (where ``seeds_mask`` is True) by
+        selecting the neighbor with smallest cost at each step.  The search
+        stops when a seed is reached, a non-finite cost is encountered, or the
+        maximum number of steps is exceeded. Returns the list of coordinates
+        visited.
+        """
         x,y,z = map(int, start_xyz)
         D = self.cost_map
         nx,ny,nz = D.shape
@@ -282,15 +300,28 @@ class GeodesicPath3D:
 
         return path
 
-
-    
     def to_all_components_from_ext_3d(self, ignore_labels=(0,), cost_threshold=np.inf):
-        """
-        Soft version of 'to_all_components_from_ext_3d'.
+        """Compute minimal-cost paths from the current extremity to every other label.
 
-        - Allows paths to reach distal components if cost map allows.
-        - Uses the minimal cost voxel in each component.
-        - Optionally applies a cost threshold to avoid large background leaks.
+        This method searches the precomputed ``self.cost_map`` for the lowest
+        finite-cost voxel within each component (excluding those in
+        ``ignore_labels`` or the source component). For each reachable
+        component it backtracks a minimal energy path from that voxel to the
+        extremity seed using :meth:`_backtrack_min_path_3d`.
+
+        Parameters
+        ----------
+        ignore_labels : sequence, optional
+            Labels to skip entirely (default includes 0 for background).
+        cost_threshold : float, optional
+            Discard target components whose minimum cost exceeds this value,
+            preventing paths that would leak excessively into background.
+
+        Returns
+        -------
+        dict
+            Mapping label → info dict containing ``start`` (voxel coords),
+            ``min_cost``, ``path`` (list of coords) and ``label``.
         """
 
         seeds_mask = np.isfinite(self.cost_map) & (self.cost_map == 0)
@@ -333,11 +364,17 @@ class GeodesicPath3D:
 
         return results
 
-
     # ---------------------------------------------------------------------
     # Tangent & validity checks (same logic as 2D)
     # ---------------------------------------------------------------------
     def compute_path_tan(self, path_points):
+        """Return the average tangent direction of a polyline.
+
+        The tangent is computed as the normalized sum of successive
+        difference vectors along ``path_points``. The result is negated so that
+        it points from the end toward the start (matching the extremity
+        orientation used elsewhere).
+        """
         if len(path_points) < 2:
             return (0,0,0)
 
@@ -349,6 +386,12 @@ class GeodesicPath3D:
         return tuple(avg.tolist())
 
     def _angle_between_tangents(self, t1, t2, degrees=True):
+        """Compute the angle between two tangent vectors.
+
+        Returns the angle in degrees by default, or radians if
+        ``degrees=False``. Handles zero-length vectors gracefully by
+        returning 0.
+        """
         t1 = np.array(t1, dtype=np.float32)
         t2 = np.array(t2, dtype=np.float32)
 
@@ -361,111 +404,8 @@ class GeodesicPath3D:
         θ = np.arccos(cosθ)
         return np.degrees(θ) if degrees else θ
 
-    def _compute_intensity_diff_along_path(self, path_points):
-        """
-        3D version: compute mean |I[i+1] - I[i]| along the geodesic path.
-        Returns a single scalar.
-        """
-        if len(path_points) < 2:
-            return 0.0
-
-        values = []
-        for i in range(len(path_points) - 1):
-            x1, y1, z1 = path_points[i]
-            x2, y2, z2 = path_points[i+1]
-
-            if (0 <= x1 < self.img.shape[0] and 
-                0 <= y1 < self.img.shape[1] and 
-                0 <= z1 < self.img.shape[2] and
-                0 <= x2 < self.img.shape[0] and 
-                0 <= y2 < self.img.shape[1] and 
-                0 <= z2 < self.img.shape[2]):
-
-                v1 = float(self.img[x1, y1, z1])
-                v2 = float(self.img[x2, y2, z2])
-                values.append(abs(v2 - v1))
-
-        return float(np.mean(values)) if len(values) else 0.0
-
-    def _compute_intensity_diff_ortho_path(self, path_points,
-                                       radius=2,
-                                       center_radius=1):
-        """
-        3D orthogonal contrast.
-        For each path point:
-            - compute tangent
-            - define orthogonal plane
-            - sample intensities in circle around center
-            - compare center vs ring
-        Returns: mean contrast along the path.
-        """
-        if len(path_points) < 3:
-            return 0.0
-
-        H, W, D = self.img.shape
-        contrasts = []
-
-        pts = np.array(path_points, dtype=np.float32)
-
-        for i in range(1, len(pts)-1):
-            p0, p1, p2 = pts[i-1], pts[i], pts[i+1]
-
-            # tangent
-            t = p2 - p0
-            n = np.linalg.norm(t)
-            if n < 1e-8:
-                continue
-            t = t / n
-
-            # find two orthogonal unit vectors in plane perpendicular to t
-            # choose an arbitrary non-collinear vector
-            if abs(t[0]) < 0.9:
-                a = np.array([1, 0, 0], dtype=np.float32)
-            else:
-                a = np.array([0, 1, 0], dtype=np.float32)
-
-            # first orthogonal vector
-            u = np.cross(t, a)
-            u = u / (np.linalg.norm(u) + 1e-8)
-
-            # second orthogonal vector
-            v = np.cross(t, u)
-            v = v / (np.linalg.norm(v) + 1e-8)
-
-            center_vals = []
-            ring_vals = []
-
-            cx, cy, cz = p1.astype(int)
-
-            for rx in range(-radius, radius+1):
-                for ry in range(-radius, radius+1):
-
-                    # (rx, ry) in u-v plane
-                    offset = rx * u + ry * v
-                    xi = int(round(cx + offset[0]))
-                    yi = int(round(cy + offset[1]))
-                    zi = int(round(cz + offset[2]))
-
-                    if 0 <= xi < H and 0 <= yi < W and 0 <= zi < D:
-                        val = float(self.img[xi, yi, zi])
-
-                        dist = np.sqrt(rx*rx + ry*ry)
-
-                        if dist <= center_radius:
-                            center_vals.append(val)
-                        else:
-                            ring_vals.append(val)
-
-            if center_vals and ring_vals:
-                c = abs(np.mean(ring_vals) - np.mean(center_vals))
-                contrasts.append(c)
-
-        return float(np.mean(contrasts)) if len(contrasts) else 0.0
-
     def _check_path_validity(self, path_points,
-                         max_angle=75, # 60
-                         min_along=10,
-                         min_ortho=10):
+                         max_angle=60):
         """
         3D version of the 2D validity logic.
         Returns True / False.
@@ -485,18 +425,6 @@ class GeodesicPath3D:
         if not any(np.array_equal(pt, coord) for pt in path_points):
             print("[COMPLETE] Reject: extremity missing")
             return False
-
-        # ---------- intensity along path ----------
-        # along = self._compute_intensity_diff_along_path(path_points)
-        # if along < min_along:
-        #     print("[ALONG] Reject: insufficient contrast =", along)
-        #     return False
-
-        # # ---------- orthogonal contrast ----------
-        # ortho = self._compute_intensity_diff_ortho_path(path_points)
-        # if ortho < min_ortho:
-        #     print("[ORTHO] Reject: insufficient contrast =", ortho)
-        #     return False
 
         return True
 
@@ -546,6 +474,15 @@ class GeodesicPath3D:
         return best
     
     def to_nearest_geod_component_from_ext_3d(self, ignore_labels=(0,)):
+        """Select the closest reachable component and store its path info.
+
+        Calls :meth:`to_all_components_from_ext_3d` to compute minimal-cost
+        paths to all other labels, then applies a directional filter based on
+        the extremity tangent to pick the most forward-facing target.  The
+        chosen path and associated metadata are stored on ``self``
+        (``path``, ``min_cost``, ``target_label`` and ``path_valid``).
+        Returns None if no suitable target is found.
+        """
         results = self.to_all_components_from_ext_3d(ignore_labels)
         if not results:
             return None
@@ -579,14 +516,17 @@ class GeodesicPath3D:
         self.target_label = info["label"]
         self.path_valid = self._check_path_validity(points)
 
-
 class GeodesicPaths3D():
-    
-    """
-    GeodesicPaths2D combining all the paths from all the GeodesicPath2d
+    """Container for computing and managing multiple geodesic paths.
+
+    Each instance wraps an :class:`Extremities3D` object along with the
+    corresponding image, label and probability volumes.  Paths are stored in
+    ``self.paths`` after computation and associated cost maps in
+    ``self.cost_maps``.
     """
     
     def __init__(self, _extremities: Extremities3D,img,label_mask,prob_mask):
+        """Initialize with extremities handler and image volumes."""
         self.extremities = _extremities
         self.img = img 
         self.label = label_mask
@@ -654,6 +594,11 @@ class GeodesicPaths3D():
         return None
     
     def duplicates(self)->list:
+        """Return list of undirected connections present in computed paths.
+
+        Each connection is represented as a sorted two-element list of
+        component IDs. Paths marked invalid are ignored.
+        """
         connections = []
         for path in self.paths:
             if path.path_valid is False:
@@ -710,6 +655,11 @@ class GeodesicPaths3D():
         return unique_connections
 
     def export_cost_maps(self):
+        """Merge all individual cost maps into a single minimum-cost volume.
+
+        Returns a volume where each voxel holds the smallest value over all
+        ``self.cost_maps`` entries, or ``None`` if no maps are available.
+        """
         if len(self.cost_maps) != 0:
             merged_cost_maps = np.full_like(self.img, np.inf)
             for _map in self.cost_maps:
@@ -718,7 +668,5 @@ class GeodesicPaths3D():
             return merged_cost_maps
         else:
             return None
-# -------------------------------
-# Geodesic distance (PyTorch, Jacobi) for 2D
-# -------------------------------
+
 

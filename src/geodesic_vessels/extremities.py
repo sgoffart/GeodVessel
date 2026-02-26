@@ -9,7 +9,9 @@ from scipy.ndimage import generate_binary_structure
 from scipy import ndimage
 
 
-# -------------------------------------------- 3D extremities detection classes --------------------------------------------
+# -------------------------------
+# Extraction of extremities
+# -------------------------------
 
 @dataclass
 class Extremity3D:
@@ -57,18 +59,6 @@ class Extremities3D:
     def build_skeleton_from_comp(comp: np.ndarray) -> np.ndarray:
         """3D skeletonization."""
         return skeletonize(comp)
-    
-    # @staticmethod
-    # def build_skeleton_from_comp(binary_img):
-    #     # naive iterative erosion to get "skeleton-like" voxels
-    #     structure = np.ones((3,3,3))
-    #     skeleton = np.zeros_like(binary_img)
-    #     tmp = binary_img.copy()
-    #     while tmp.sum() > 0:
-    #         eroded = ndimage.binary_erosion(tmp, structure=structure)
-    #         skeleton |= (tmp & ~eroded)
-    #         tmp = eroded
-    #     return skeleton
 
     @staticmethod
     def skeleton_to_graph(skeleton: np.ndarray) -> nx.Graph:
@@ -88,6 +78,25 @@ class Extremities3D:
         return G
 
     def build_graphs_for_components(self, verbose=False):
+        """Generate skeleton graphs and locate extremities for every label.
+
+        Iterates through nonzero component labels in ``self.labeled_mask``.  For
+        each component the following steps are performed:
+
+        1. skeletonize the binary component
+        2. convert skeleton voxels to a 26-connected graph
+        3. identify nodes with degree==1 as extremities
+        4. handle edge cases (empty, no skeleton, loops) to still provide a
+           fallback extremity coordinate
+
+        Results are stored in ``self.graphs`` (label→nx.Graph) and
+        ``self.extremities`` (label→list of :class:`Extremity3D`).
+
+        Parameters
+        ----------
+        verbose : bool
+            If True, print progress and diagnostic messages.
+        """
         labels = np.unique(self.labeled_mask)
         labels = labels[labels != 0]
 
@@ -179,51 +188,25 @@ class Extremities3D:
             if verbose:
                 print(f"[3D]   → Found {len(ep_coords)} extremities")
 
-    # def build_graphs_for_components(self, verbose=False):
-    #     labels = np.unique(self.labeled_mask)
-    #     labels = labels[labels != 0]
+    def compute_tangent_at_extremity(self, ext: Extremity3D, nb_neighbors=3, verbose=False):
+        """Estimate a tangent vector at a given extremity using nearby graph nodes.
 
-    #     for lbl in labels:
-    #         print(lbl)
-    #         if verbose:
-    #             print(f"[3D] Processing component {lbl}")
-    #         comp = (self.labeled_mask == lbl)
+        Parameters
+        ----------
+        ext : Extremity3D
+            Extremity object for which the tangent is computed. The result is
+            stored back on ``ext.tangent``.
+        nb_neighbors : int
+            Number of neighbor nodes to include in a PCA-based direction
+            estimate; use ``1`` for a simple 1-step neighbor difference.
+        verbose : bool
+            Print diagnostic messages.
 
-    #         skel = self.build_skeleton_from_comp(comp)
-    #         G = self.skeleton_to_graph(skel)
-    #         self.graphs[lbl] = G
-
-    #         endpoints = [n for n, d in G.degree() if d == 1]
-
-    #         # --------------------------------------------------
-    #         # Fallback for small / loop components
-    #         # --------------------------------------------------
-    #         if len(endpoints) == 0 and len(G.nodes) > 0:
-    #             print(f"component {lbl} has no endpoints yet.")
-    #             # get skeleton coordinates
-    #             coords = np.array([G.nodes[n]['pos'] for n in G.nodes])
-
-    #             if len(coords) == 1:
-    #                 print("single voxel")
-    #                 # single voxel component
-    #                 endpoints = [list(G.nodes)[0]]
-                    
-
-    #             else:
-    #                 print("extremity farthest strategy")
-    #                 # centroid-farthest strategy
-    #                 center = coords.mean(axis=0)
-    #                 dists = np.linalg.norm(coords - center, axis=1)
-    #                 farthest_node = list(G.nodes)[np.argmax(dists)]
-    #                 endpoints = [farthest_node]
-
-    #         ep_coords = [tuple(G.nodes[n]['pos']) for n in endpoints]
-    #         self.extremities[lbl] = [Extremity3D(coord=c, comp_id=lbl) for c in ep_coords]
-
-    #         if verbose:
-    #             print(f"[3D]   → Found {len(ep_coords)} extremities")
-
-    def compute_tangent_at_extremity(self, ext: Extremity3D, nb_neighbors=1, verbose=False):
+        Returns
+        -------
+        np.ndarray
+            The unit tangent vector pointing outward from the component.
+        """
         coord = ext.coord
         lbl = self.labeled_mask[coord]
 
@@ -296,7 +279,12 @@ class Extremities3D:
         ext.tangent = -direction / np.linalg.norm(direction)
         return ext.tangent
 
-    def compute_tangents_for_all_extremities(self, nb_neighbors=1):
+    def compute_tangents_for_all_extremities(self, nb_neighbors=3):
+        """Compute tangents for every stored extremity in all components.
+
+        Arguments are forwarded to :meth:`compute_tangent_at_extremity`.
+        Results are saved in ``self.tangents`` parallel to ``self.extremities``.
+        """
         for lbl, eps in self.extremities.items():
             self.tangents[lbl] = []
             for ext in eps:
@@ -304,6 +292,13 @@ class Extremities3D:
                 self.tangents[lbl].append(t)
 
     def compute_radius_orthogonal_mask(self, ext: Extremity3D, max_r=8, n_angles=16, verbose=False):
+        """Estimate vessel radius at an extremity by sampling orthogonal rays.
+
+        A circular set of rays (``n_angles``) is cast in the plane perpendicular
+        to the provided tangent. The radius is the median distance until the
+        labeled mask exits the component. The value is stored in ``ext.radius``
+        and returned.
+        """
         lbl = ext.comp_id
         coord = ext.coord
         tangent = ext.tangent
@@ -347,6 +342,10 @@ class Extremities3D:
         return ext.radius
 
     def compute_radii_for_all_extremities_mask(self, max_r=8):
+        """Compute radii at every extremity using mask-based orthogonal sampling.
+
+        Results populate ``self.radii`` aligned with ``self.extremities``.
+        """
         for lbl, eps in self.extremities.items():
             self.radii[lbl] = []
             for ext in eps:
@@ -354,9 +353,17 @@ class Extremities3D:
                 self.radii[lbl].append(r)
 
     def get_specs_single_extremity(self, comp_id, ext_id):
+        """Return a plain-dict description of one extremity.
+
+        Parameters
+        ----------
+        comp_id : int
+            Component label identifier.
+        ext_id : int
+            Index of the extremity within the component's list.
+        """
         return self.extremities[comp_id][ext_id].as_dict()
 
     def get_radius(self,comp_id, ext_id):
+        """Shortcut to retrieve stored radius for a given extremity."""
         return self.extremities[comp_id][ext_id].radius
-
-    

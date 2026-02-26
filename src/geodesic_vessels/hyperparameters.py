@@ -384,3 +384,130 @@ def optimize_dip_params(img_arr, seg_arr, prob_arr,
     print("="*60 + "\n")
     
     return best_params
+
+
+# ============================================
+# EXEMPLE D'UTILISATION
+# ============================================
+
+if __name__ == "__main__":
+    import nrrd
+    import time
+    
+    patient_id = "0003"
+    
+    # Load data
+    print("Loading data...")
+    base_path = "/srv/storage/epione@storage2.sophia.grid5000.fr/sgoffart"
+    img_path = f"{base_path}/datasets/ASOCA/Dataset001_ASOCA/imagesTr/case_{patient_id}_0000.nrrd"
+    seg_path = f"{base_path}/datasets/ASOCA/nnUNet_results/Dataset001_ASOCA/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_0/validation/case_{patient_id}.nrrd"
+    seg_gt_path = f"{base_path}/datasets/ASOCA/Dataset001_ASOCA/labelsTr/case_{patient_id}.nrrd"
+    seg_prob_path = f"{base_path}/datasets/ASOCA/nnUNet_results/Dataset001_ASOCA/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_0/validation/case_{patient_id}.npz"
+    
+    # Load arrays
+    img_arr, img_hdr = nrrd.read(img_path)
+    seg_arr, seg_hdr = nrrd.read(seg_path)
+    seg_gt_arr, seg_gt_hdr = nrrd.read(seg_gt_path)
+    
+    # Load probability map
+    seg_prob_arr = np.load(seg_prob_path)['probabilities'][1]
+    
+    print(f"Initial shapes:")
+    print(f"  Image:        {img_arr.shape}")
+    print(f"  Segmentation: {seg_arr.shape}")
+    print(f"  Probability:  {seg_prob_arr.shape}")
+    
+    # Transpose probability to match image orientation
+    if seg_prob_arr.shape != img_arr.shape:
+        print(f"\nTransposing probability map...")
+        # Try common permutations
+        if seg_prob_arr.shape == (img_arr.shape[2], img_arr.shape[0], img_arr.shape[1]):
+            seg_prob_arr = np.transpose(seg_prob_arr, (1, 2, 0))  # (Z,H,W) -> (H,W,Z)
+        elif seg_prob_arr.shape == (img_arr.shape[2], img_arr.shape[1], img_arr.shape[0]):
+            seg_prob_arr = np.transpose(seg_prob_arr, (2, 1, 0))  # (Z,W,H) -> (H,W,Z)
+        else:
+            # Generic fallback
+            seg_prob_arr = np.transpose(seg_prob_arr, (1, 2, 0))
+        
+        print(f"  Probability after transpose: {seg_prob_arr.shape}")
+    
+    # Verify shapes
+    assert img_arr.shape == seg_arr.shape == seg_prob_arr.shape, \
+        f"Shape mismatch! img={img_arr.shape}, seg={seg_arr.shape}, prob={seg_prob_arr.shape}"
+    
+    print(f"\n✓ All shapes match: {img_arr.shape}")
+    
+    # Optimize with more points for robustness
+    print("\n" + "="*60)
+    print("Starting hyperparameter optimization...")
+    print("="*60)
+    t0 = time.time()
+    
+    # Test all three formulations
+    formulations = ["DIP", "DIP+", "DIP++"]
+    all_results = {}
+    
+    for weight_map in formulations:
+        print(f"\n>>> Testing {weight_map} formulation...")
+        
+        best_params = optimize_dip_params(
+            img_arr, 
+            seg_arr > 0, 
+            seg_prob_arr,
+            weight_map=weight_map,  # ← Test DIP, DIP+, DIP++
+            n_samples=25,           # 25 points for good coverage
+            n_iterations=40,        # 40 iterations for fine convergence
+            downsample=2            # Keep downsample=2 for speed
+        )
+        
+        all_results[weight_map] = best_params
+        print(best_params)
+    
+    print(f"\n✓ All optimizations completed in {time.time() - t0:.1f} seconds")
+    
+    # Compare results
+    print("\n" + "="*60)
+    print("COMPARISON OF FORMULATIONS:")
+    print("="*60)
+    print(f"{'Formulation':<12} {'Alpha':<10} {'Gamma':<10}")
+    print("-" * 60)
+    for weight_map, params in all_results.items():
+        print(f"{weight_map:<12} {params['alpha']:<10.4f} {params['gamma']:<10.4f}")
+    print("="*60)
+    
+    # Use DIP++ as default (you can change this)
+    default_params = {
+        "alpha": all_results["DIP++"]["alpha"],
+        "beta": 0.001,
+        "gamma": all_results["DIP++"]["gamma"],
+        "theta": 0,
+        "lambda": all_results["DIP++"]["lambda"],
+        "deg": 60,
+        "max_it": 10,
+        "weight_map": "DIP++",
+        "device": "cuda"
+    }
+    
+    # Use in your pipeline
+    default_params = {
+        "alpha": all_results["DIP++"]["alpha"],
+        "beta": 0.001,
+        "gamma": all_results["DIP++"]["gamma"],
+        "theta": 0,
+        "lambda": all_results["DIP++"]["lambda"],
+        "deg": 60,
+        "max_it": 10,
+        "weight_map": "DIP++",
+        "device": "cuda"
+    }
+    
+    print("\n" + "="*60)
+    print("READY TO USE - Optimized parameters (DIP++):")
+    print("="*60)
+    for key, value in default_params.items():
+        print(f"  {key:12s}: {value}")
+    print("="*60)
+    print("\nYou can also try DIP or DIP+ formulations:")
+    print(f"  DIP  : alpha={all_results['DIP']['alpha']:.4f}, gamma={all_results['DIP']['gamma']:.4f}")
+    print(f"  DIP+ : alpha={all_results['DIP+']['alpha']:.4f}, gamma={all_results['DIP+']['gamma']:.4f}")
+    print(f"  DIP++: alpha={all_results['DIP++']['alpha']:.4f}, gamma={all_results['DIP++']['gamma']:.4f}")

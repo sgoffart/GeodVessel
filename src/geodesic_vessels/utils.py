@@ -1,21 +1,24 @@
+import os
 import torch
+import pyvista as pv
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
-import os
-
 import plotly.graph_objects as go
 import plotly.io as pio
 
+from matplotlib.patches import Patch
 from scipy.ndimage import binary_dilation
 from sklearn.mixture import GaussianMixture
 
-import pyvista as pv
-# os.environ["DISPLAY"] = ":1"  # Ensure PyVista uses the correct display for off-screen rendering
 pv.global_theme.allow_empty_mesh = True
 pv.OFF_SCREEN = True
 
 def save_comparison(y_true, y_pred, y_pred_new,img, filename="comparison.png", cmap='gray'):
+    """Generate and save a 1x4 figure comparing image, ground truth and predictions.
+
+    Parameters are numpy arrays or tensors for true mask, old/new predictions and the
+    underlying image. The result is saved to the current working directory.
+    """
     
     # Convert tensors to numpy if needed
     if torch.is_tensor(y_true): y_true = y_true.cpu().numpy()
@@ -120,6 +123,11 @@ def plotly_segmentation_results_3D(patient_id,
                                    seg_corr_arr,
                                    filedir = "./",
                                    show_plotly=False):
+    """Create a Plotly HTML 3D scatter visualization of segmentation vs ground truth.
+
+    The figure highlights corrections and compares prediction, probabilities and GT.
+    Results are written to an HTML file in ``filedir`` using the patient identifier.
+    """
     
     diff_mask = seg_arr != seg_corr_arr
     # --------------------------
@@ -293,71 +301,22 @@ def render_combined_volumes(volumes_colors_opacities, window_size=(1200, 1200),p
     
     return img
 
-def _vol_to_surface(vol):
-    """Convert a binary volume to a PyVista surface mesh."""
-    vol_binary = (vol > 0).astype(np.uint8)
-    grid = pv.ImageData(dimensions=vol_binary.shape)
-    grid.point_data["values"] = vol_binary.flatten(order="F")
+def _vol_to_surface(vol, dilate_iter=1, smooth_sigma=0.2):
+    from scipy.ndimage import gaussian_filter, binary_dilation
+    if vol.sum() == 0:
+        return pv.PolyData()
+    
+    vol_dilated = binary_dilation(
+        (vol > 0),
+        iterations=dilate_iter
+    ).astype(np.float32)
+    
+    vol_smooth = gaussian_filter(vol_dilated, sigma=smooth_sigma)
+    
+    grid = pv.ImageData(dimensions=vol_smooth.shape)
+    grid.point_data["values"] = vol_smooth.flatten(order="F")
+    
     return grid.contour(isosurfaces=[0.5], scalars="values")
-
-# def _render_all_panels(panels, resolution=1200, camera_position="iso"):
-#     """
-#     Render N panels in ONE plotter using subplots so the camera
-#     orientation is identical across all panels.
-
-#     panels : list of list of (vol, color, opacity)
-#     Returns: list of (H, W, 3) uint8 numpy arrays, one per panel.
-#     """
-#     n = len(panels)
-#     p = pv.Plotter(
-#         off_screen=True,
-#         shape=(1, n),
-#         window_size=(resolution * n, resolution),
-#     )
-#     p.background_color = "white"
-
-#     # ── Add meshes to each subplot ────────────────────────────────────────
-#     for col, vols_colors_opacities in enumerate(panels):
-#         p.subplot(0, col)
-#         p.enable_lightkit()
-#         for vol, color, opacity in vols_colors_opacities:
-#             if vol.sum() == 0:
-#                 continue
-#             surf = _vol_to_surface(vol)
-#             if surf.n_points == 0:
-#                 continue
-#             p.add_mesh(
-#                 surf,
-#                 color=color,
-#                 opacity=opacity,
-#                 smooth_shading=True,
-#                 lighting=True,
-#                 ambient=0.2,
-#                 diffuse=0.8,
-#                 specular=0.3,
-#                 specular_power=15,
-#             )
-
-#     # ── Set the same camera for every subplot ─────────────────────────────
-#     p.subplot(0, 0)
-#     p.camera_position = camera_position
-#     p.reset_camera()
-#     cam = p.camera  # capture camera state from subplot 0
-
-#     for col in range(1, n):
-#         p.subplot(0, col)
-#         p.camera_position = camera_position
-#         p.reset_camera()
-#         p.camera.position    = cam.position
-#         p.camera.focal_point = cam.focal_point
-#         p.camera.up          = cam.up
-
-#     # ── Screenshot → slice into individual panels ─────────────────────────
-#     full = p.screenshot(return_img=True)   # (resolution, resolution*n, 3)
-#     p.close()
-
-#     w = resolution
-#     return [full[:, col * w : (col + 1) * w, :] for col in range(n)]
 
 def _render_all_panels(panels, resolution=1200, camera_position="iso"):
     """
@@ -487,17 +446,12 @@ def plot_segmentation_3d_screenshot(patient_id, seg_gt_arr, seg_arr, seg_corr_ar
     plt.close(fig)
     print(f"  Saved -> {out_path}")
 
-
 # --------------------------------------------
 # compute probability maps with GMM (Gaussian Mixture Models)
 # ---------------------------------------------------------------------
 # ============================================================
 # CONTINUOUS GMM FOR ARTERY LUMEN (FIXED)
 # ============================================================
-
-import numpy as np
-from scipy.ndimage import binary_dilation
-from sklearn.mixture import GaussianMixture
 
 def compute_lumen_gmm_saturated(
     img,
@@ -722,7 +676,6 @@ def compute_lumen_gmm_continuous_component(
     prob[infer_mask] = gmm.predict_proba(vals)[:, vessel_idx]
 
     return prob
-
 
 # ---------------------------------------------------------------------
 # Calibration of probability maps

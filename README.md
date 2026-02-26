@@ -1,99 +1,125 @@
-# geodesic-vessels
+# Geodesic Vessels
 
-## Getting started
+This repository contains tools for analyzing and reconstructing vascular
+structures using geodesic distances computed on medical images.  The code
+is primarily written in Python and relies on NumPy, PyTorch, SciPy,
+scikit-learn and visualization libraries (Plotly, PyVista).
 
-# 🩸 GeodesicVessels
+![description](assets/pipeline_overview-v2.png)
 
-**geodesic_vessels** is a Python package for **geodesic-based vessel reconnection and reconstruction**.
-It aims to restore **vascular continuity** by reconnecting fragmented vessel segments using **geodesic paths**, while maintaining realistic topology and geometry.
-The package is designed for use in medical image analysis, particularly angiographic, CT, and MRI vascular datasets.
+## Package Structure
 
----
+- **src/geodesic_vessels/**
+  - `utils.py` – miscellaneous helpers including image comparison,
+    3D rendering functions and Gaussian mixture models for lumen
+    probability estimation.
+  - `extremities.py` – routines for extracting component extremities
+    (endpoints) from a labeled mask; supports skeletonization, graph
+    conversion, tangent and radius estimation.
+  - `paths.py` – core geodesic distance computation using a GPU- accelerated
+    Jacobi solver; backtracking, path validity and multi-component path
+    management classes are included.
+  - `reconstructions.py` – methods to rebuild tubular vessels from
+    centerline paths using radius or geodesic-based heuristics.
+  - `metrics.py` – evaluation metrics helpers.
+  - `hyperparameters.py` – configuration helpers.
+  - `main.py` – entry points for command-line usage.
+  - `__init__.py` – package initializer.
 
-## 🚀 Key Features
+## Key Concepts
 
-* **Geodesic Reconnection:**
-  Automatically reconnects broken or missing vessel branches using geodesic shortest paths guided by probability or intensity maps.
+1. **Extremity Extraction**
+   - Use `Extremities3D` to derive skeletons of labeled components and
+     identify endpoint coordinates with associated tangent directions and
+     radii.
 
-* **Level-Set & Implicit Reconstruction:**
-  Optionally integrates level-set–based reconstruction to rebuild smooth, tubular vessel geometries.
+2. **Geodesic Path Computation**
+   - Every extremity is processed by `GeodesicPath3D` to compute a
+     3D geodesic cost map via a Jacobi iteration (`geodesic_distance_torch_3d`).
+   - Backtracking finds minimal-energy paths through the cost map.
+   - `GeodesicPaths3D` orchestrates path computation for all extremities,
+     filtering duplicates and exporting merged cost maps.
 
-* **2D and 3D Support:**
-  Compatible with both 2D slices and full 3D volumes.
+3. **Reconstruction**
+   - The `ReconstructVessel3D` class can rebuild a vessel mask from a
+     centerline path using several strategies (`radius`, `geodesic`,
+     `scale`, `centerline`).  `ReconstructVessels3D` handles multiple
+     paths.
 
-* **Memory-Efficient Implementation:**
-  Handles large medical images through efficient patch-wise operations.
+4. **Utilities**
+   - Visualization of segmentation results (2D/3D) and rendering of
+     surfaces using PyVista.
+   - GMM-based probability estimation for lumen segmentation.
+   - Calibration of probabilistic maps.
 
-* **Integrated Evaluation Tools:**
-  Includes metrics such as Dice, CLDice, connectivity, APLS, CCQ, and TLTS to assess reconstruction quality.
+## Installation
 
----
+Clone the repository and install the package.
+   ```bash
+   git clone <repo-url> geodesic-vessels
+   cd geodesic-vessels
+   pip install .
+   ```
 
-## 📦 Installation
+## Basic Usage Examples
 
-```bash
-git clone https://github.com/.../geodesic-vessels.git
-cd geodesic-vessels
-pip install -e .
+Below are snippets illustrating common workflows.
+
+### Extract extremities and compute paths
+```python
+from geodesic_vessels.extremities import Extremities3D
+from geodesic_vessels.paths import GeodesicPaths3D
+
+labeled_mask = ...  # numpy array with integer labels
+img = ...  # grayscale image volume
+prob = ...  # optional probability map
+
+ext = Extremities3D(labeled_mask)
+ext.build_graphs_for_components(verbose=True)
+ext.compute_tangents_for_all_extremities()
+ext.compute_radii_for_all_extremities_mask(max_r=8)
+
+paths = GeodesicPaths3D(ext, img, labeled_mask, prob)
+paths.compute_all_paths()
+unique = paths.filter_duplicates()
+cost_volume = paths.export_cost_maps()
 ```
 
-### Requirements
+### Compact benchmark example
 
-* Python ≥ 3.11
-
-You can install dependencies manually:
+The `tests/benchmark_5folds_ASOCA_3d.py` script illustrates a full
+pipeline.  You can either run it directly:
 
 ```bash
-pip install numpy scipy scikit-image networkx torch matplotlib
+python tests/benchmark_5folds_ASOCA_3d.py
 ```
 
-
-## ⚙️ Usage Example
+or invoke individual pieces in Python:
 
 ```python
-import numpy as np
-from geodesic_vessels import geodesic_reconnect, evaluate_paths
+from tests.benchmark_5folds_ASOCA_3d import process_patient, DEFAULT_PARAMS
+import os
 
-# Load your binary vessel segmentation
-vessel_mask = np.load("segmentation.npy")
-
-# Perform geodesic-based reconnection
-reconnected_mask, paths = geodesic_reconnect(vessel_mask, prob_map=None)
-
-# Evaluate the reconstruction
-metrics = evaluate_paths(paths, vessel_mask, ground_truth_mask)
-print(metrics)
+os.makedirs("out", exist_ok=True)
+res = process_patient("0019", 0, "out")
+print(res["metrics_new"])
 ```
 
----
+The helper module has been removed from the package; please rely on the
+benchmark scripts or your own plotting code.
 
-## 🧠 Methodology Overview
+## Testing & Benchmarks
+The `tests/` directory contains various scripts used to benchmark the
+algorithms on different datasets.  They can be executed directly with
+`python` and typically save output figures to the working directory.
 
-The **GeodesicVessels** pipeline consists of:
-
-1. **Centerline Extraction:**
-   Skeletonize the input segmentation to obtain disconnected vessel centerlines.
-
-2. **Geodesic Path Finding:**
-   Use a cost map derived from the inverse of intensity or probability to compute minimal geodesic connections between vessel endpoints.
-
-3. **Tubular Reconstruction:**
-   Reconstruct smooth vessel geometry along each geodesic path using implicit or spline-based modeling.
-
-4. **Topology Preservation:**
-   Merge reconstructed paths with the original mask while maintaining vessel connectivity.
+## Contribution & Maintenance
+- Add README sections or update existing ones when new functionality is
+  introduced.
+- Keep docstrings in sync with code; many functions now include
+  comprehensive descriptions.
 
 ---
 
-## 📊 Metrics & Evaluation
-
-| Metric           | Description                                         |
-| :--------------- | :-------------------------------------------------- |
-| **Dice**         | Overlap between predicted and ground truth vessels. |
-| **CLDice**       | Connectivity-aware Dice metric.                     |
-| **Connectivity** | Ratio of correctly connected components.            |
-| **APLS**         | Average Path Length Similarity.                     |
-| **CCQ**          | Correctness, Completeness, and Quality.             |
-| **TLTS**         | Too-Long-Too-Short path ratio.                      |
-
----
+This README reflects the current state (Feb 2026) of the package and
+should be kept up-to-date when adding features or reorganizing the code.
