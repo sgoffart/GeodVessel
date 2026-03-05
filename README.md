@@ -47,7 +47,7 @@ scikit-learn and visualization libraries (Plotly, PyVista).
      paths.
 
 4. **Utilities**
-   - Visualization of segmentation results (2D/3D) and rendering of
+   - Visualization of segmentation results (3D) and rendering of
      surfaces using PyVista.
    - GMM-based probability estimation for lumen segmentation.
    - Calibration of probabilistic maps.
@@ -70,24 +70,5 @@ Complementary packages can be required:
 
 ## Basic Usage Examples
 
-Below are snippets illustrating common workflows.
+Check python script `example.py`.
 
-### Extract extremities and compute paths
-```python
-from geodesic_vessels.extremities import Extremities3D
-from geodesic_vessels.paths import GeodesicPaths3D
-
-labeled_mask = ...  # numpy array with integer labels
-img = ...  # grayscale image volume
-prob = ...  # optional probability map
-
-ext = Extremities3D(labeled_mask)
-ext.build_graphs_for_components(verbose=True)
-ext.compute_tangents_for_all_extremities()
-ext.compute_radii_for_all_extremities_mask(max_r=8)
-
-paths = GeodesicPaths3D(ext, img, labeled_mask, prob)
-paths.compute_all_paths()
-unique = paths.filter_duplicates()
-cost_volume = paths.export_cost_maps()
-```

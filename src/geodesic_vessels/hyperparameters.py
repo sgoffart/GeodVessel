@@ -331,7 +331,7 @@ class FastDIPOptimizer:
 
 def optimize_dip_params(img_arr, seg_arr, prob_arr, 
                        weight_map="DIP++",
-                       n_samples=25, 
+                       n_samples=50, 
                        n_iterations=40, 
                        downsample=2):
     """
