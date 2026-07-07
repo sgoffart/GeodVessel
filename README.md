@@ -5,7 +5,7 @@ structures using geodesic distances computed on medical images.  The code
 is primarily written in Python and relies on NumPy, PyTorch, SciPy,
 scikit-learn and visualization libraries (Plotly, PyVista).
 
-![description](assets/pipeline_overview-v3.png)
+![description](assets/pipeline_overview_v3.png)
 
 ## Package Structure
 
